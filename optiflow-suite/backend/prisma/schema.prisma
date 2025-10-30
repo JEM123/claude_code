@@ -1,0 +1,1139 @@
+// OptiFlow Suite - Database Schema
+// Clean Architecture with Domain-Driven Design
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE ENTITIES - Base Models
+// ============================================================================
+
+/// Metadata commune à toutes les entités
+model BaseEntity {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+  updatedBy String?  @map("updated_by")
+  isActive  Boolean  @default(true) @map("is_active")
+  isDeleted Boolean  @default(false) @map("is_deleted")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@map("base_entities")
+}
+
+// ============================================================================
+// MODULE 1: AUTHENTICATION & AUTHORIZATION
+// ============================================================================
+
+/// Utilisateurs du système
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  username      String    @unique
+  password      String
+  firstName     String    @map("first_name")
+  lastName      String    @map("last_name")
+  phone         String?
+  avatar        String?
+  locale        String    @default("fr")
+  timezone      String    @default("Europe/Paris")
+  isActive      Boolean   @default(true) @map("is_active")
+  isVerified    Boolean   @default(false) @map("is_verified")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  person        Person?   @relation(fields: [personId], references: [id])
+  personId      String?   @unique @map("person_id")
+
+  roles         UserRole[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@map("users")
+  @@index([email])
+  @@index([username])
+}
+
+/// Rôles du système
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+/// Table de liaison User-Role
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  roleId    String   @map("role_id")
+  grantedAt DateTime @default(now()) @map("granted_at")
+  grantedBy String?  @map("granted_by")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+  @@index([userId])
+  @@index([roleId])
+}
+
+/// Permissions
+model Permission {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  module      String
+  action      String
+  resource    String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+  @@index([module])
+  @@index([resource])
+}
+
+/// Table de liaison Role-Permission
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String   @map("role_id")
+  permissionId String   @map("permission_id")
+  grantedAt    DateTime @default(now()) @map("granted_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// Sessions utilisateur
+model Session {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  token        String    @unique
+  refreshToken String?   @unique @map("refresh_token")
+  ipAddress    String?   @map("ip_address")
+  userAgent    String?   @map("user_agent")
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  revokedAt    DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+  @@index([userId])
+  @@index([token])
+}
+
+// ============================================================================
+// MODULE 2: ENTITY (Organisation Structure)
+// ============================================================================
+
+/// Entités organisationnelles (hiérarchie)
+model Entity {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  type        EntityType
+  description String?  @db.Text
+  level       Int      @default(0)
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Hiérarchie
+  parentId String? @map("parent_id")
+  parent   Entity? @relation("EntityHierarchy", fields: [parentId], references: [id])
+  children Entity[] @relation("EntityHierarchy")
+
+  // Relations
+  managerId String? @map("manager_id")
+  manager   Person? @relation("EntityManager", fields: [managerId], references: [id])
+
+  persons    Person[]
+  positions  Position[]
+  processes  Process[]
+  documents  Document[]
+  risks      Risk[]
+
+  @@map("entities")
+  @@index([parentId])
+  @@index([type])
+  @@index([managerId])
+}
+
+enum EntityType {
+  COMPANY
+  DIVISION
+  DEPARTMENT
+  SERVICE
+  UNIT
+  TEAM
+}
+
+// ============================================================================
+// MODULE 3: PERSON
+// ============================================================================
+
+/// Personnes (collaborateurs)
+model Person {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  firstName    String    @map("first_name")
+  lastName     String    @map("last_name")
+  email        String?   @unique
+  phone        String?
+  mobile       String?
+  photo        String?
+  birthDate    DateTime? @map("birth_date")
+  hireDate     DateTime? @map("hire_date")
+  leaveDate    DateTime? @map("leave_date")
+  status       PersonStatus @default(ACTIVE)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Relations organisationnelles
+  entityId    String?  @map("entity_id")
+  entity      Entity?  @relation(fields: [entityId], references: [id])
+
+  positionId  String?  @map("position_id")
+  position    Position? @relation(fields: [positionId], references: [id])
+
+  // Hiérarchie managériale
+  managerId   String?  @map("manager_id")
+  manager     Person?  @relation("ManagerSubordinate", fields: [managerId], references: [id])
+  subordinates Person[] @relation("ManagerSubordinate")
+
+  // Relations
+  user               User?
+  managedEntities    Entity[] @relation("EntityManager")
+  tasks              Task[] @relation("TaskAssignee")
+  responsibleTasks   Task[] @relation("TaskResponsible")
+  competencies       PersonCompetency[]
+  trainings          PersonTraining[]
+  controlsAssigned   Control[]
+  incidentsReported  Incident[] @relation("IncidentReporter")
+  improvementsAuthor Improvement[] @relation("ImprovementAuthor")
+  missionsAssigned   Mission[]
+
+  @@map("persons")
+  @@index([entityId])
+  @@index([positionId])
+  @@index([managerId])
+  @@index([email])
+}
+
+enum PersonStatus {
+  ACTIVE
+  ON_LEAVE
+  INACTIVE
+  TERMINATED
+}
+
+// ============================================================================
+// MODULE 4: POSITION
+// ============================================================================
+
+/// Postes
+model Position {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  title          String
+  description    String?  @db.Text
+  mission        String?  @db.Text
+  responsibilities String? @db.Text
+  conditions     String?  @db.Text
+  level          String?
+  category       String?
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  entityId String? @map("entity_id")
+  entity   Entity? @relation(fields: [entityId], references: [id])
+
+  persons            Person[]
+  competencies       PositionCompetency[]
+  requiredTrainings  PositionTraining[]
+
+  @@map("positions")
+  @@index([entityId])
+}
+
+// ============================================================================
+// MODULE 5: COMPETENCY
+// ============================================================================
+
+/// Compétences
+model Competency {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  name           String
+  description    String?  @db.Text
+  category       String?
+  domain         String?
+  requiredLevel  Int      @default(1) @map("required_level")
+  evaluationCriteria String? @db.Text @map("evaluation_criteria")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  persons   PersonCompetency[]
+  positions PositionCompetency[]
+  trainings TrainingCompetency[]
+
+  @@map("competencies")
+  @@index([category])
+  @@index([domain])
+}
+
+/// Compétences des personnes
+model PersonCompetency {
+  id            String    @id @default(uuid())
+  personId      String    @map("person_id")
+  competencyId  String    @map("competency_id")
+  currentLevel  Int       @default(1) @map("current_level")
+  targetLevel   Int?      @map("target_level")
+  evaluatedAt   DateTime? @map("evaluated_at")
+  evaluatedBy   String?   @map("evaluated_by")
+  validUntil    DateTime? @map("valid_until")
+  notes         String?   @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  person     Person     @relation(fields: [personId], references: [id], onDelete: Cascade)
+  competency Competency @relation(fields: [competencyId], references: [id], onDelete: Cascade)
+
+  @@unique([personId, competencyId])
+  @@map("person_competencies")
+  @@index([personId])
+  @@index([competencyId])
+}
+
+/// Compétences requises pour un poste
+model PositionCompetency {
+  id            String   @id @default(uuid())
+  positionId    String   @map("position_id")
+  competencyId  String   @map("competency_id")
+  requiredLevel Int      @default(1) @map("required_level")
+  isMandatory   Boolean  @default(true) @map("is_mandatory")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  position   Position   @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  competency Competency @relation(fields: [competencyId], references: [id], onDelete: Cascade)
+
+  @@unique([positionId, competencyId])
+  @@map("position_competencies")
+}
+
+// ============================================================================
+// MODULE 6: TRAINING
+// ============================================================================
+
+/// Formations
+model Training {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?  @db.Text
+  type        TrainingType
+  duration    Int?     // en heures
+  provider    String?
+  cost        Decimal? @db.Decimal(10, 2)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  competencies      TrainingCompetency[]
+  personTrainings   PersonTraining[]
+  positionTrainings PositionTraining[]
+
+  @@map("trainings")
+  @@index([type])
+}
+
+enum TrainingType {
+  INTERNAL
+  EXTERNAL
+  ELEARNING
+  CERTIFICATION
+  WORKSHOP
+}
+
+/// Formation suivies par les personnes
+model PersonTraining {
+  id          String    @id @default(uuid())
+  personId    String    @map("person_id")
+  trainingId  String    @map("training_id")
+  status      TrainingStatus @default(PLANNED)
+  plannedDate DateTime? @map("planned_date")
+  completedDate DateTime? @map("completed_date")
+  score       Decimal?  @db.Decimal(5, 2)
+  certificate String?
+  notes       String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  person   Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  training Training @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+
+  @@map("person_trainings")
+  @@index([personId])
+  @@index([trainingId])
+  @@index([status])
+}
+
+enum TrainingStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+/// Formations requises pour un poste
+model PositionTraining {
+  id          String   @id @default(uuid())
+  positionId  String   @map("position_id")
+  trainingId  String   @map("training_id")
+  isMandatory Boolean  @default(true) @map("is_mandatory")
+  frequency   String?  // ex: "Annual", "Every 2 years"
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  training Training @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+
+  @@unique([positionId, trainingId])
+  @@map("position_trainings")
+}
+
+/// Compétences développées par une formation
+model TrainingCompetency {
+  id           String   @id @default(uuid())
+  trainingId   String   @map("training_id")
+  competencyId String   @map("competency_id")
+  levelGained  Int      @default(1) @map("level_gained")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  training   Training   @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+  competency Competency @relation(fields: [competencyId], references: [id], onDelete: Cascade)
+
+  @@unique([trainingId, competencyId])
+  @@map("training_competencies")
+}
+
+// ============================================================================
+// MODULE 7: DOCUMENT
+// ============================================================================
+
+/// Documents
+model Document {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  title          String
+  description    String?  @db.Text
+  type           DocumentType
+  category       String?
+  status         DocumentStatus @default(DRAFT)
+  version        String   @default("1.0")
+  filePath       String?  @map("file_path")
+  fileSize       Int?     @map("file_size")
+  mimeType       String?  @map("mime_type")
+  confidentiality String? @default("PUBLIC")
+  isTemplate     Boolean  @default(false) @map("is_template")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  publishedAt    DateTime? @map("published_at")
+  reviewDate     DateTime? @map("review_date")
+
+  // Relations
+  entityId String? @map("entity_id")
+  entity   Entity? @relation(fields: [entityId], references: [id])
+
+  ownerId String? @map("owner_id")
+
+  versions    DocumentVersion[]
+  validations DocumentValidation[]
+  links       DocumentLink[]
+
+  @@map("documents")
+  @@index([type])
+  @@index([status])
+  @@index([entityId])
+}
+
+enum DocumentType {
+  PROCEDURE
+  PROCESS
+  FORM
+  TEMPLATE
+  REPORT
+  MANUAL
+  POLICY
+  INSTRUCTION
+  RECORD
+  OTHER
+}
+
+enum DocumentStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+  OBSOLETE
+}
+
+/// Versions de documents
+model DocumentVersion {
+  id          String   @id @default(uuid())
+  documentId  String   @map("document_id")
+  version     String
+  changes     String?  @db.Text
+  filePath    String   @map("file_path")
+  fileSize    Int      @map("file_size")
+  createdBy   String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_versions")
+  @@index([documentId])
+}
+
+/// Workflow de validation
+model DocumentValidation {
+  id          String   @id @default(uuid())
+  documentId  String   @map("document_id")
+  validatorId String   @map("validator_id")
+  order       Int      @default(1)
+  status      ValidationStatus @default(PENDING)
+  comments    String?  @db.Text
+  validatedAt DateTime? @map("validated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_validations")
+  @@index([documentId])
+  @@index([validatorId])
+}
+
+enum ValidationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Liens entre documents
+model DocumentLink {
+  id           String   @id @default(uuid())
+  documentId   String   @map("document_id")
+  linkedType   String   @map("linked_type") // Process, Risk, Control, etc.
+  linkedId     String   @map("linked_id")
+  linkType     String   @default("REFERENCE") @map("link_type")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_links")
+  @@index([documentId])
+  @@index([linkedType, linkedId])
+}
+
+// ============================================================================
+// MODULE 8: PROCESS
+// ============================================================================
+
+/// Processus
+model Process {
+  id           String   @id @default(uuid())
+  code         String   @unique
+  name         String
+  description  String?  @db.Text
+  type         ProcessType
+  category     String?
+  status       String   @default("ACTIVE")
+  level        Int      @default(1)
+  order        Int      @default(0)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  entityId String? @map("entity_id")
+  entity   Entity? @relation(fields: [entityId], references: [id])
+
+  ownerId String? @map("owner_id")
+
+  parentId String?  @map("parent_id")
+  parent   Process? @relation("ProcessHierarchy", fields: [parentId], references: [id])
+  children Process[] @relation("ProcessHierarchy")
+
+  procedures Procedure[]
+  indicators Indicator[]
+  risks      Risk[]
+  controls   Control[]
+
+  @@map("processes")
+  @@index([type])
+  @@index([entityId])
+  @@index([parentId])
+}
+
+enum ProcessType {
+  STRATEGIC
+  OPERATIONAL
+  SUPPORT
+  MANAGEMENT
+}
+
+// ============================================================================
+// MODULE 9: PROCEDURE
+// ============================================================================
+
+/// Procédures
+model Procedure {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  title       String
+  description String?  @db.Text
+  version     String   @default("1.0")
+  status      DocumentStatus @default(DRAFT)
+  flowData    Json?    @map("flow_data") // Diagramme de flux
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  processId String?  @map("process_id")
+  process   Process? @relation(fields: [processId], references: [id])
+
+  steps ProcedureStep[]
+
+  @@map("procedures")
+  @@index([processId])
+  @@index([status])
+}
+
+/// Étapes de procédure
+model ProcedureStep {
+  id          String   @id @default(uuid())
+  procedureId String   @map("procedure_id")
+  order       Int
+  who         String?  @db.Text // Qui
+  what        String   @db.Text // Quoi
+  how         String?  @db.Text // Comment
+  duration    Int?     // en minutes
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  procedure Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+  @@map("procedure_steps")
+  @@index([procedureId])
+}
+
+// ============================================================================
+// MODULE 10: TASK (Todo Manager)
+// ============================================================================
+
+/// Tâches
+model Task {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  status      TaskStatus @default(TODO)
+  priority    Priority @default(MEDIUM)
+  dueDate     DateTime? @map("due_date")
+  startDate   DateTime? @map("start_date")
+  completedAt DateTime? @map("completed_at")
+  progress    Int      @default(0) // 0-100%
+  estimatedHours Decimal? @db.Decimal(5, 2) @map("estimated_hours")
+  actualHours    Decimal? @db.Decimal(5, 2) @map("actual_hours")
+  tags        String[]
+  isRecurrent Boolean  @default(false) @map("is_recurrent")
+  recurrence  String?  // CRON expression
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  assigneeId String? @map("assignee_id")
+  assignee   Person? @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  responsibleId String? @map("responsible_id")
+  responsible   Person? @relation("TaskResponsible", fields: [responsibleId], references: [id])
+
+  parentId String? @map("parent_id")
+  parent   Task?   @relation("TaskDependency", fields: [parentId], references: [id])
+  subtasks Task[]  @relation("TaskDependency")
+
+  linkedType String? @map("linked_type") // Process, Risk, Control, etc.
+  linkedId   String? @map("linked_id")
+
+  comments TaskComment[]
+
+  @@map("tasks")
+  @@index([assigneeId])
+  @@index([responsibleId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([linkedType, linkedId])
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  REVIEW
+  DONE
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Commentaires sur les tâches
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String   @map("task_id")
+  content   String   @db.Text
+  authorId  String   @map("author_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@map("task_comments")
+  @@index([taskId])
+}
+
+// ============================================================================
+// MODULE 11: RISK
+// ============================================================================
+
+/// Risques
+model Risk {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  title          String
+  description    String?  @db.Text
+  category       RiskCategory
+  type           String?
+  source         String?
+  status         RiskStatus @default(IDENTIFIED)
+  probability    Int      @default(3) // 1-5
+  impact         Int      @default(3) // 1-5
+  riskLevel      Int      @default(9) // probability * impact @map("risk_level")
+  residualProb   Int?     @map("residual_prob")
+  residualImpact Int?     @map("residual_impact")
+  residualLevel  Int?     @map("residual_level")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  processId String?  @map("process_id")
+  process   Process? @relation(fields: [processId], references: [id])
+
+  entityId String? @map("entity_id")
+  entity   Entity? @relation(fields: [entityId], references: [id])
+
+  ownerId String? @map("owner_id")
+
+  controls     Control[]
+  incidents    Incident[]
+  improvements Improvement[]
+
+  @@map("risks")
+  @@index([category])
+  @@index([status])
+  @@index([processId])
+  @@index([entityId])
+}
+
+enum RiskCategory {
+  STRATEGIC
+  OPERATIONAL
+  FINANCIAL
+  COMPLIANCE
+  REPUTATIONAL
+  SECURITY
+  ENVIRONMENTAL
+  HUMAN
+}
+
+enum RiskStatus {
+  IDENTIFIED
+  ASSESSED
+  TREATED
+  MONITORED
+  CLOSED
+}
+
+// ============================================================================
+// MODULE 12: CONTROL
+// ============================================================================
+
+/// Contrôles
+model Control {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  title         String
+  description   String?  @db.Text
+  type          ControlType
+  frequency     String?  // Daily, Weekly, Monthly, etc.
+  status        ControlStatus @default(PLANNED)
+  dueDate       DateTime? @map("due_date")
+  completedDate DateTime? @map("completed_date")
+  result        ControlResult? @map("result")
+  comments      String?  @db.Text
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  processId String?  @map("process_id")
+  process   Process? @relation(fields: [processId], references: [id])
+
+  riskId String? @map("risk_id")
+  risk   Risk?   @relation(fields: [riskId], references: [id])
+
+  responsibleId String? @map("responsible_id")
+  responsible   Person? @relation(fields: [responsibleId], references: [id])
+
+  @@map("controls")
+  @@index([type])
+  @@index([status])
+  @@index([processId])
+  @@index([riskId])
+  @@index([responsibleId])
+}
+
+enum ControlType {
+  PREVENTIVE
+  DETECTIVE
+  CORRECTIVE
+  DIRECTIVE
+}
+
+enum ControlStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+  CANCELLED
+}
+
+enum ControlResult {
+  COMPLIANT
+  NON_COMPLIANT
+  PARTIAL
+  NOT_APPLICABLE
+}
+
+// ============================================================================
+// MODULE 13: INCIDENT
+// ============================================================================
+
+/// Incidents
+model Incident {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  title         String
+  description   String   @db.Text
+  type          IncidentType
+  severity      Severity
+  status        IncidentStatus @default(REPORTED)
+  occurredAt    DateTime @map("occurred_at")
+  detectedAt    DateTime @default(now()) @map("detected_at")
+  resolvedAt    DateTime? @map("resolved_at")
+  rootCause     String?  @db.Text @map("root_cause")
+  correctiveAction String? @db.Text @map("corrective_action")
+  preventiveAction String? @db.Text @map("preventive_action")
+  cost          Decimal? @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  reporterId String? @map("reporter_id")
+  reporter   Person? @relation("IncidentReporter", fields: [reporterId], references: [id])
+
+  riskId String? @map("risk_id")
+  risk   Risk?   @relation(fields: [riskId], references: [id])
+
+  improvements Improvement[]
+
+  @@map("incidents")
+  @@index([type])
+  @@index([severity])
+  @@index([status])
+  @@index([reporterId])
+  @@index([riskId])
+}
+
+enum IncidentType {
+  QUALITY
+  SAFETY
+  SECURITY
+  ENVIRONMENTAL
+  COMPLIANCE
+  OPERATIONAL
+  OTHER
+}
+
+enum Severity {
+  MINOR
+  MODERATE
+  MAJOR
+  CRITICAL
+}
+
+enum IncidentStatus {
+  REPORTED
+  INVESTIGATING
+  TREATING
+  RESOLVED
+  CLOSED
+}
+
+// ============================================================================
+// MODULE 14: IMPROVEMENT
+// ============================================================================
+
+/// Améliorations
+model Improvement {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  title         String
+  description   String   @db.Text
+  origin        String?
+  category      String?
+  status        ImprovementStatus @default(PROPOSED)
+  priority      Priority @default(MEDIUM)
+  estimatedCost Decimal? @db.Decimal(10, 2) @map("estimated_cost")
+  actualCost    Decimal? @db.Decimal(10, 2) @map("actual_cost")
+  estimatedBenefit Decimal? @db.Decimal(10, 2) @map("estimated_benefit")
+  actualBenefit    Decimal? @db.Decimal(10, 2) @map("actual_benefit")
+  startDate     DateTime? @map("start_date")
+  targetDate    DateTime? @map("target_date")
+  completedDate DateTime? @map("completed_date")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  authorId String? @map("author_id")
+  author   Person? @relation("ImprovementAuthor", fields: [authorId], references: [id])
+
+  incidentId String?   @map("incident_id")
+  incident   Incident? @relation(fields: [incidentId], references: [id])
+
+  riskId String? @map("risk_id")
+  risk   Risk?   @relation(fields: [riskId], references: [id])
+
+  @@map("improvements")
+  @@index([status])
+  @@index([priority])
+  @@index([authorId])
+  @@index([incidentId])
+  @@index([riskId])
+}
+
+enum ImprovementStatus {
+  PROPOSED
+  EVALUATING
+  APPROVED
+  IN_PROGRESS
+  IMPLEMENTED
+  REJECTED
+  CANCELLED
+}
+
+// ============================================================================
+// MODULE 15: MISSION
+// ============================================================================
+
+/// Missions (projets)
+model Mission {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  title         String
+  description   String?  @db.Text
+  objectives    String?  @db.Text
+  status        MissionStatus @default(PLANNING)
+  priority      Priority @default(MEDIUM)
+  budget        Decimal? @db.Decimal(12, 2)
+  startDate     DateTime? @map("start_date")
+  endDate       DateTime? @map("end_date")
+  progress      Int      @default(0) // 0-100%
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  managerId String? @map("manager_id")
+  manager   Person? @relation(fields: [managerId], references: [id])
+
+  @@map("missions")
+  @@index([status])
+  @@index([managerId])
+}
+
+enum MissionStatus {
+  PLANNING
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+// ============================================================================
+// MODULE 16: INDICATOR (KPI)
+// ============================================================================
+
+/// Indicateurs
+model Indicator {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  name          String
+  description   String?  @db.Text
+  formula       String?  @db.Text
+  unit          String?
+  type          IndicatorType
+  frequency     String   // Daily, Weekly, Monthly, etc.
+  target        Decimal? @db.Decimal(10, 2)
+  minThreshold  Decimal? @db.Decimal(10, 2) @map("min_threshold")
+  maxThreshold  Decimal? @db.Decimal(10, 2) @map("max_threshold")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  processId String?  @map("process_id")
+  process   Process? @relation(fields: [processId], references: [id])
+
+  responsibleId String? @map("responsible_id")
+
+  measurements IndicatorMeasurement[]
+
+  @@map("indicators")
+  @@index([type])
+  @@index([processId])
+}
+
+enum IndicatorType {
+  PERFORMANCE
+  QUALITY
+  EFFICIENCY
+  EFFECTIVENESS
+  COMPLIANCE
+}
+
+/// Mesures d'indicateur
+model IndicatorMeasurement {
+  id          String   @id @default(uuid())
+  indicatorId String   @map("indicator_id")
+  value       Decimal  @db.Decimal(10, 2)
+  period      DateTime
+  comments    String?  @db.Text
+  measuredBy  String?  @map("measured_by")
+  measuredAt  DateTime @default(now()) @map("measured_at")
+
+  indicator Indicator @relation(fields: [indicatorId], references: [id], onDelete: Cascade)
+
+  @@map("indicator_measurements")
+  @@index([indicatorId])
+  @@index([period])
+}
+
+// ============================================================================
+// MODULE 17: NOTIFICATION
+// ============================================================================
+
+/// Notifications
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      NotificationType
+  title     String
+  message   String   @db.Text
+  link      String?
+  isRead    Boolean  @default(false) @map("is_read")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+  @@index([userId])
+  @@index([isRead])
+}
+
+enum NotificationType {
+  TASK
+  DOCUMENT
+  VALIDATION
+  INCIDENT
+  CONTROL
+  RISK
+  IMPROVEMENT
+  SYSTEM
+}
+
+// ============================================================================
+// MODULE 18: AUDIT LOG
+// ============================================================================
+
+/// Journal d'audit
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  changes    Json?
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+  @@index([userId])
+  @@index([entityType])
+  @@index([createdAt])
+}
